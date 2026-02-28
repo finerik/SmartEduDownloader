@@ -59,6 +59,22 @@ namespace SmartEduDownloader.Cli
         private const string _DownloadedAria2CZip = "Downloaded\\Aria2c.zip";
         //private const string MyAvatarImageUrl = "https://pica.zhimg.com/3e1fa87c8ba8023679384796d1226a36_l.jpg";
 
+        // 知识问答相关常量
+        private static JArray? _KnowledgeQAJArray;
+        private static JObject? _KnowledgeQACatalog;
+        private const string KnowledgeQATagsDataUrl =
+            "https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/tags/knowledge_qa_tag.json";
+        private const string KnowledgeQADataUrl =
+            "https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/resources/knowledge_qa/version/data_version.json";
+        private const string KnowledgeQATagsFilename = "Data\\KnowledgeQACatalog.json";
+        private const string KnowledgeQADataFilename = "Data\\KnowledgeQA.json";
+        static readonly List<string> _KnowledgeQADataFiles =
+        [
+            "Data\\KnowledgeQA_Part_100.json",
+            "Data\\KnowledgeQA_Part_101.json",
+            "Data\\KnowledgeQA_Part_102.json"
+        ];
+
         static async Task Main()
         {
             // 检查 Aria2c 版本
@@ -67,7 +83,7 @@ namespace SmartEduDownloader.Cli
             // 欢迎信息
             SayHello();
 
-            // 更新数据
+            // 更新教材数据
             await UpdateAllData();
 
             var downloadsPath = GetMyDownloadsPath();
@@ -77,8 +93,29 @@ namespace SmartEduDownloader.Cli
             if (!Directory.Exists(_DownloadFolder))
                 Directory.CreateDirectory(_DownloadFolder);
 
-            // 显示菜单
-            await ShowMenuLevel();
+            // 显示主菜单
+            await ShowMainMenu();
+        }
+
+        static async Task ShowMainMenu()
+        {
+            var menuItems = new List<string> { "下载教材电子版", "知识问答" };
+            AddExtraMenuItem(menuItems, true);
+
+            var choice = Prompt.Select("请选择功能", menuItems);
+            switch (choice)
+            {
+                case "← 退出":
+                    SayGoodbye();
+                    break;
+                case "知识问答":
+                    await UpdateKnowledgeQAData();
+                    await ShowMenuQALevel();
+                    break;
+                default:
+                    await ShowMenuLevel();
+                    break;
+            }
         }
 
         static async Task UpdateAllData()
@@ -87,6 +124,123 @@ namespace SmartEduDownloader.Cli
             await UpdateCatalogData();
             // 更新教材数据
             await UpdateBooksData();
+        }
+
+        /// <summary>
+        /// 更新知识问答数据
+        /// </summary>
+        static async Task UpdateKnowledgeQAData()
+        {
+            await UpdateKnowledgeQACatalogData();
+            await UpdateKnowledgeQAItemsData();
+        }
+
+        /// <summary>
+        /// 获取知识问答 Catalog 数据文件
+        /// </summary>
+        private static async Task UpdateKnowledgeQACatalogData()
+        {
+            try
+            {
+                System.Console.ForegroundColor = ConsoleColor.Cyan;
+                System.Console.Write("正在更新知识问答目录数据...");
+                if (File.Exists(KnowledgeQATagsFilename))
+                    _KnowledgeQACatalog = JObject.Parse(await File.ReadAllTextAsync(KnowledgeQATagsFilename));
+                else
+                {
+                    await DownloadFileLite(KnowledgeQATagsDataUrl, KnowledgeQATagsFilename);
+                    var jsonString = await File.ReadAllTextAsync(KnowledgeQATagsFilename);
+                    _KnowledgeQACatalog = JObject.Parse(jsonString);
+                    HashSet<string> propertiesToKeep = ["tag_id", "tag_name", "children", "hierarchies"];
+                    FilterProperties(_KnowledgeQACatalog, propertiesToKeep);
+                    await File.WriteAllTextAsync(KnowledgeQATagsFilename, _KnowledgeQACatalog.ToString());
+                }
+                System.Console.Write("\r更新知识问答目录数据...完成。\n");
+                System.Console.ResetColor();
+            }
+            catch (Exception e)
+            {
+                ShowErrorMessage($"\rUpdateKnowledgeQACatalogData() 更新知识问答目录数据出错：{e}");
+            }
+        }
+
+        /// <summary>
+        /// 更新知识问答条目数据
+        /// </summary>
+        private static async Task UpdateKnowledgeQAItemsData()
+        {
+            try
+            {
+                System.Console.ForegroundColor = ConsoleColor.Cyan;
+                System.Console.Write("正在更新知识问答数据...");
+                if (File.Exists(KnowledgeQADataFilename))
+                    _KnowledgeQAJArray = JArray.Parse(await File.ReadAllTextAsync(KnowledgeQADataFilename));
+                else
+                {
+                    await DownloadKnowledgeQAData();
+                    _KnowledgeQAJArray = new JArray();
+                    foreach (var dataFile in _KnowledgeQADataFiles)
+                    {
+                        if (!File.Exists(dataFile)) continue;
+                        var jsonArray = JArray.Parse(await File.ReadAllTextAsync(dataFile));
+                        foreach (var token in jsonArray)
+                        {
+                            var item = new JObject
+                            {
+                                { "id", token["id"] },
+                                { "title", token["title"] },
+                                { "label", token["label"]?[1]!.ToString().Replace(" ", "·") },
+                                { "tag_paths", token["tag_paths"]?[0] },
+                            };
+                            _KnowledgeQAJArray.Add(item);
+                        }
+                        File.Delete(dataFile);
+                    }
+                    await File.WriteAllTextAsync(KnowledgeQADataFilename, _KnowledgeQAJArray.ToString());
+                }
+                System.Console.Write("\r更新知识问答数据...完成。\n");
+                System.Console.ResetColor();
+            }
+            catch (Exception e)
+            {
+                ShowErrorMessage($"UpdateKnowledgeQAItemsData() 更新知识问答数据出错：{e}");
+            }
+        }
+
+        /// <summary>
+        /// 下载知识问答数据文件
+        /// </summary>
+        private static async Task DownloadKnowledgeQAData()
+        {
+            try
+            {
+                var client = new HttpClient();
+                var jsonString = await client.GetStringAsync(KnowledgeQADataUrl);
+                using var document = JsonDocument.Parse(jsonString);
+                var root = document.RootElement;
+                var urls = root.GetProperty("urls").GetString();
+                if (urls == null)
+                    Console.WriteLine("注意：知识问答数据文件列表为空。", Color.Red);
+                else
+                {
+                    var urlList = urls.Split(',');
+                    for (var i = 0; i < urlList.Length && i < _KnowledgeQADataFiles.Count; i++)
+                    {
+                        var url = urlList[i];
+                        var filename = Path.GetFileName(url);
+                        filename = Path.Combine("Data", $"KnowledgeQA_{filename}");
+                        if (!File.Exists(filename))
+                        {
+                            if (await DownloadFileLite(url, filename))
+                                _KnowledgeQADataFiles[i] = filename;
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"DownloadKnowledgeQAData() 下载知识问答数据出错：{e}", Color.Red);
+            }
         }
 
         /// <summary>
@@ -473,6 +627,178 @@ namespace SmartEduDownloader.Cli
             return books;
         }
 
+        private static OrderedDictionary<string, string> LoadDictionaryFromKnowledgeQACatalog()
+        {
+            return LoadDictionaryFromKnowledgeQACatalog(string.Empty);
+        }
+
+        private static OrderedDictionary<string, string> LoadDictionaryFromKnowledgeQACatalog(string tag_Id)
+        {
+            var dictionary = new OrderedDictionary<string, string>();
+            var path = $"$.hierarchies..children[?(@.tag_id == '{tag_Id}')].hierarchies[0].children";
+            if (string.IsNullOrEmpty(tag_Id))
+                path = "$.hierarchies[0].children[0].hierarchies[0].children";
+            var children = _KnowledgeQACatalog!.SelectToken(path);
+            if (children == null) return dictionary;
+
+            foreach (var token in children)
+            {
+                var name = token.SelectToken("$.tag_name")?.ToString();
+                var id = token.SelectToken("$.tag_id")?.ToString();
+                if (name != null && name.Contains("•")) name = name.Replace("•", "·");
+                if (id != null && name != null)
+                    dictionary.Add(name, id);
+            }
+            return dictionary;
+        }
+
+        private static List<JToken> LoadKnowledgeQAItems(string subjectId, string gradeId)
+        {
+            var path = $"$.[?(@.tag_paths=~ /.*{subjectId}\\/{gradeId}.*/i)]";
+            var items = _KnowledgeQAJArray!.SelectTokens(path).ToList();
+            return items;
+        }
+
+        static async Task ShowMenuQALevel()
+        {
+            var dictionary = LoadDictionaryFromKnowledgeQACatalog();
+            var sortOrder = new List<string> { "小学", "初中", "高中", "小学（五·四学制）", "初中（五·四学制）" };
+            var levels = dictionary.Keys.ToArray();
+            Array.Sort(levels, (x, y) => sortOrder.IndexOf(x).CompareTo(sortOrder.IndexOf(y)));
+            var menuItems = new List<string>(levels);
+            AddExtraMenuItem(menuItems);
+
+            var levelName = Prompt.Select("请选择【知识问答】的 【学段】", menuItems);
+            switch (levelName)
+            {
+                case "↑ 返回上级":
+                    await ShowMainMenu();
+                    break;
+                case "← 退出":
+                    SayGoodbye();
+                    break;
+                default:
+                    var levelId = dictionary[levelName];
+                    await ShowMenuQASubject(levelName, levelId);
+                    break;
+            }
+        }
+
+        static async Task ShowMenuQASubject(string levelName, string levelId)
+        {
+            var dictionary = LoadDictionaryFromKnowledgeQACatalog(levelId);
+            var menuItems = new List<string>(dictionary.Keys);
+            AddExtraMenuItem(menuItems);
+
+            var subjectName = Prompt.Select($"请选择【知识问答·{levelName}】的【科目】", menuItems);
+            switch (subjectName)
+            {
+                case "↑ 返回上级":
+                    await ShowMenuQALevel();
+                    break;
+                case "← 退出":
+                    SayGoodbye();
+                    break;
+                default:
+                    var subjectId = dictionary[subjectName];
+                    await ShowMenuQAGrade(levelName, levelId, subjectName, subjectId);
+                    break;
+            }
+        }
+
+        static async Task ShowMenuQAGrade(string levelName, string levelId, string subjectName, string subjectId)
+        {
+            var sortOrder = new List<string> { "一年级", "二年级", "三年级", "四年级", "五年级", "六年级", "七年级", "八年级", "九年级", "※ 下载全部" };
+            var dictionary = LoadDictionaryFromKnowledgeQACatalog(subjectId);
+            var grades = dictionary.Keys.ToArray();
+            Array.Sort(grades, (x, y) => sortOrder.IndexOf(x).CompareTo(sortOrder.IndexOf(y)));
+            var menuItems = new List<string>(grades) { "※ 下载全部" };
+            AddExtraMenuItem(menuItems);
+
+            var gradeName = Prompt.Select($"请选择【知识问答·{levelName}·{subjectName}】的【年级】", menuItems);
+            switch (gradeName)
+            {
+                case "↑ 返回上级":
+                    await ShowMenuQASubject(levelName, levelId);
+                    break;
+                case "← 退出":
+                    SayGoodbye();
+                    break;
+                case "※ 下载全部":
+                    await ConfirmDownloadAllQA(levelName, levelId, subjectName, subjectId, dictionary);
+                    break;
+                default:
+                    var gradeId = dictionary[gradeName];
+                    await ConfirmDownloadQA(levelName, levelId, subjectName, subjectId, gradeName, gradeId);
+                    break;
+            }
+        }
+
+        private static async Task ConfirmDownloadAllQA(string levelName, string levelId, string subjectName, string subjectId, OrderedDictionary<string, string> grades)
+        {
+            Formatter[] formatters =
+            [
+                new(levelName, Color.Gray),
+                new(subjectName, Color.Orange),
+                new Formatter("※ 全部年级 ※", Color.Gray)
+            ];
+            Console.WriteLineFormatted("下载【知识问答·{0}·{1}】{2} 的内容：", Color.Blue, formatters);
+            var ok = Prompt.Confirm("请确认是否下载 ※ 全部年级 ※ 的知识问答？");
+            if (!ok)
+            {
+                await ShowMenuQAGrade(levelName, levelId, subjectName, subjectId);
+            }
+            else
+            {
+                foreach (var grade in grades)
+                {
+                    var gradeName = grade.Key;
+                    var gradeId = grade.Value;
+                    var folder = Path.Combine(_DownloadFolder, $"知识问答\\{levelName}\\{subjectName}\\{gradeName}");
+                    var items = LoadKnowledgeQAItems(subjectId, gradeId);
+                    await downloadBooks(items, folder);
+                }
+            }
+            ok = Prompt.Confirm("是否继续？否则退出");
+            if (ok)
+                await ShowMenuQASubject(levelName, levelId);
+            else
+                SayGoodbye();
+        }
+
+        private static async Task ConfirmDownloadQA(string levelName, string levelId, string subjectName, string subjectId, string gradeName, string gradeId)
+        {
+            Formatter[] formatters =
+            [
+                new(levelName, Color.Gray),
+                new(subjectName, Color.Orange),
+                new(gradeName, Color.Gray),
+            ];
+            Console.WriteLineFormatted("【知识问答·{0}·{1}·{2}】的内容有：", Color.Blue, formatters);
+            var count = 0;
+            var items = LoadKnowledgeQAItems(subjectId, gradeId);
+            foreach (var item in items)
+            {
+                var itemName = item["title"];
+                Console.WriteLine($"\t{++count:D2} {itemName}");
+            }
+
+            var ok = Prompt.Confirm("请确认是否下载全部？");
+            if (!ok)
+            {
+                await ShowMenuQAGrade(levelName, levelId, subjectName, subjectId);
+                return;
+            }
+            var folder = Path.Combine(_DownloadFolder, $"知识问答\\{levelName}\\{subjectName}\\{gradeName}");
+            await downloadBooks(items, folder);
+
+            ok = Prompt.Confirm("是否继续下载其它知识问答？否则退出");
+            if (ok)
+                await ShowMenuQAGrade(levelName, levelId, subjectName, subjectId);
+            else
+                SayGoodbye();
+        }
+
         static async Task ShowMenuLevel()
         {
             var dictionary = LoadDictionaryFromCatalog();  // 学段列表
@@ -481,13 +807,13 @@ namespace SmartEduDownloader.Cli
             var levels = dictionary.Keys.ToArray();
             Array.Sort(levels, (x, y) => sortOrder.IndexOf(x).CompareTo(sortOrder.IndexOf(y)));
             var menuItems = new List<string>(levels);
-            AddExtraMenuItem(menuItems, true);
+            AddExtraMenuItem(menuItems);
 
             var levelName = Prompt.Select("请选择需下载教材的 【学段】", menuItems);
             switch (levelName)
             {
                 case "↑ 返回上级":
-                    SayHello();
+                    await ShowMainMenu();
                     break;
                 case "← 退出":
                     SayGoodbye();
